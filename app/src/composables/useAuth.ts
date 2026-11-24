@@ -26,7 +26,10 @@ export const obtenerToken = () => token.value;
 
 /** TODO [M2] Borrar token y usuario de la memoria (refs) y del almacenamiento cifrado. */
 export async function olvidarSesion() {
-  // TODO [M2]
+  token.value = null;
+  usuario.value = null;
+  await SecureStorage.remove(CLAVE_TOKEN);
+  await SecureStorage.remove(CLAVE_USUARIO);
 }
 
 export function useAuth() {
@@ -41,8 +44,23 @@ export function useAuth() {
    *  No atrape el error: LoginPage.vue ya muestra los 422.
    */
   async function login(email: string, password: string) {
-    void [email, password, api, Device, SecureStorage, CLAVE_TOKEN, CLAVE_USUARIO];
-    throw new Error('TODO [M2] login sin implementar');
+    const info = await Device.getInfo();
+    const device_name = `${info.platform} ${info.model}`.slice(0, 60);
+
+    const respuesta = await api<{ token: string; usuario: Usuario }>('/login', {
+      method: 'POST',
+      body: { email, password, device_name },
+    });
+
+    token.value = respuesta.token;
+    usuario.value = respuesta.usuario;
+    tokenCargado = true;
+
+    await SecureStorage.set(CLAVE_TOKEN, respuesta.token);
+    await SecureStorage.set(CLAVE_USUARIO, {
+      id: respuesta.usuario.id,
+      nombre: respuesta.usuario.nombre,
+    });
   }
 
   /**
@@ -51,7 +69,20 @@ export function useAuth() {
    *  Debe ejecutarse una sola vez (use la bandera tokenCargado).
    */
   async function cargarToken() {
-    void tokenCargado;
+    if (tokenCargado) return;
+    tokenCargado = true;
+
+    try {
+      const tokenGuardado = await SecureStorage.get(CLAVE_TOKEN);
+      const usuarioGuardado = await SecureStorage.get(CLAVE_USUARIO);
+
+      if (typeof tokenGuardado === 'string' && usuarioGuardado && typeof usuarioGuardado === 'object') {
+        token.value = tokenGuardado;
+        usuario.value = usuarioGuardado as unknown as Usuario;
+      }
+    } catch {
+      await olvidarSesion();
+    }
   }
 
   /**
@@ -60,7 +91,13 @@ export function useAuth() {
    *  aunque la API falle (sin red o token vencido).
    */
   async function cerrarSesion() {
-    // TODO [M2]
+    try {
+      await api<null>('/logout', { method: 'POST' });
+    } catch {
+      // Si falla la red o el token ya expiró, igualmente borramos la sesión local
+    } finally {
+      await olvidarSesion();
+    }
   }
 
   return { usuario, estaAutenticado, login, cargarToken, cerrarSesion };

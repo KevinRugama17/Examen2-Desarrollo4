@@ -29,6 +29,71 @@ export interface OpcionesApi {
  *  8. En cualquier otro caso, devolver el cuerpo JSON.
  */
 export async function api<T = unknown>(ruta: string, opciones: OpcionesApi = {}): Promise<T> {
-  void [ErrorApi, obtenerToken, olvidarSesion, router, BASE_URL, TIEMPO_MAXIMO_MS, ruta, opciones];
-  throw new Error('TODO [M1] api() sin implementar');
+  const { method = 'GET', body, params } = opciones;
+
+  // 1. Construir URL filtrando parámetros vacíos (undefined o '')
+  const searchParams = new URLSearchParams();
+  if (params) {
+    for (const [clave, valor] of Object.entries(params)) {
+      if (valor !== undefined && valor !== '') {
+        searchParams.set(clave, String(valor));
+      }
+    }
+  }
+  const queryString = searchParams.toString();
+  const baseUrl = (BASE_URL ?? '').replace(/\/+$/, '');
+  const url = `${baseUrl}${ruta}${queryString ? `?${queryString}` : ''}`;
+
+  // 2 y 3. Encabezados base y token Bearer en Authorization (nunca en la URL)
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+  };
+
+  const token = obtenerToken();
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  // 4. Cuerpo serializado como JSON cuando exista
+  const tieneBody = body !== undefined;
+  if (tieneBody) {
+    headers['Content-Type'] = 'application/json';
+  }
+
+  // 5. Tiempo máximo con AbortController y captura de fallos de red/CORS/timeout
+  const controlador = new AbortController();
+  const temporizador = setTimeout(() => controlador.abort(), TIEMPO_MAXIMO_MS);
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method,
+      headers,
+      body: tieneBody ? JSON.stringify(body) : undefined,
+      signal: controlador.signal,
+    });
+  } catch {
+    throw new ErrorApi(0, { mensaje: 'No fue posible conectar con la API.' });
+  } finally {
+    clearTimeout(temporizador);
+  }
+
+  // 6. Respuesta sin contenido (204 No Content)
+  if (response.status === 204) {
+    return null as T;
+  }
+
+  const cuerpo = await response.json().catch(() => null);
+
+  // 7. Manejo de errores HTTP y sesión inválida (401)
+  if (!response.ok) {
+    if (response.status === 401 && ruta !== '/login') {
+      await olvidarSesion();
+      await router.replace('/login');
+    }
+    throw new ErrorApi(response.status, cuerpo);
+  }
+
+  // 8. Devolver cuerpo JSON en respuestas exitosas
+  return cuerpo as T;
 }
